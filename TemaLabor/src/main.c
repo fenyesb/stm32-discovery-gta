@@ -49,21 +49,22 @@ int main(void) {
 	init_map();
 	DRV_InitDrawTimer();
 
-	while(1);
+	while (1)
+		;
 }
 
 volatile uint32_t elapsed_ticks = 0;
 
 #define N_TIMES 5
 
-#define MAP_WIDTH 30 //pálya szélessége
-#define MAP_HEIGHT 30 //pálya magassága
+#define MAP_WIDTH 70
+#define MAP_HEIGHT 70
 
 #define TILE_SIZE 32 //négyzet mérete
 
-#define TILEMAP_LENGTH 16 //négyzettextúrák száma
+#define TILEMAP_LENGTH 9 //négyzettextúrák száma
 
-int map[MAP_WIDTH][MAP_HEIGHT]; //a térkép textúraindexei
+extern const uint8_t map[];
 
 extern unsigned long tilemap[]; //összes négyzettextúra
 
@@ -75,52 +76,86 @@ float px, py; //kocsi pozíciója
 
 float vx, vy; //kocsi sebessége
 
-float cx, cy;//kamera pozíciója
+float cx, cy; //kamera pozíciója
 
-double adiff(double a, double b) { //szögek különbsége -pi és pi között
+double angle_diff(double a, double b) { //szögek különbsége -pi és pi között
 	double diff = fmod(b - a + M_PI, 2 * M_PI);
 	if (diff < 0)
 		diff += 2 * M_PI;
 	return diff - M_PI;
 
 }
+
+void physics() {
+
+	int startx = max(0, (int)(px / TILE_SIZE) -2);
+	int starty = max(0, (int)(py / TILE_SIZE) -2);
+	int endx = min(MAP_WIDTH-1, (int)(px / TILE_SIZE) + 2);
+	int endy = min(MAP_HEIGHT-1, (int)(py / TILE_SIZE) + 2);
+
+	for(int x=startx;x <=endx; x++)
+	{
+		for(int y = starty; y<=endy;y++)
+		{
+			float centerx = x*32+16;
+			float centery = y*32+16;
+			float dx = px-centerx;
+			float dy = py-centery;
+			const float force = 1.5;
+			float d = hypot(dx,dy);
+			int id = map[y*MAP_WIDTH+x];
+			if(d < 100 && (id == 0||id==1||id==2||id==3||id==7))
+			{
+				float ang = atan2(dy,dx);
+				float f = max(0, 10-d/4) * force;
+				vx += f * cos(ang);
+				vy += f * sin(ang);
+			}
+		}
+	}
+}
+
 void simulate(int touch, float an) { //kocsi mozgásának szimulációja
 
-	//érintés esetén gyorsítjuk az autót
-	float delta_v_touch = touch ? (cos(phi) * cos(an) + sin(phi) * sin(an)) : 0;
+	physics();
 
-	const acceleration = 2;
-	vx += cos(an) * delta_v_touch * acceleration;
-	vy += sin(an) * delta_v_touch * acceleration;
+	//érintés esetén gyorsítjuk az autót
+	if (touch) {
+		const float acceleration = 1;
+
+		float delta_v_touch = cos(phi) * cos(an) + sin(phi) * sin(an);
+
+		vx += cos(an) * delta_v_touch * acceleration;
+		vy += sin(an) * delta_v_touch * acceleration;
+	}
 
 	//fékezés (gördülési ellenállás)
 	const float resistance_linear = .05;
-	vx = vx * (1 - resistance_linear);
-	vy = vy * (1 - resistance_linear);
+	vx -= vx * resistance_linear;
+	vy -= vy * resistance_linear;
 
 	//fékezés (légellenállás)
-	const float resistance_quadratic = .005;
+	const float resistance_quadratic = .01;
 	vx -= (vx > 0 ? 1 : -1) * vx * vx * resistance_quadratic;
 	vy -= (vy > 0 ? 1 : -1) * vy * vy * resistance_quadratic;
 
-	const float rotspeed = .1;
-
-	const float rot_resistance = .2;
-
 	//érintés esetén forgatjuk az autót
 	if (touch) {
-		omega += adiff(phi, an) * rotspeed;
+		const float rot_speed = .05;
+		omega += angle_diff(phi, an) * rot_speed;
 	}
 
 	//forgatás lassítása
-	omega *= 1 - rot_resistance;
+	const float rot_resistance = .2;
+	omega -= omega * rot_resistance;
 
 	//kanyarodás korlátozása
-	float drift_angle = limit(omega, -.3, .3);
+	const float rot_limit = .3;
+	float rot_angle = limit(omega, -rot_limit, rot_limit);
 
 	//sebességváltozás a kanyarodás irányába
-	vx = vx * cos(drift_angle) + vy * -sin(drift_angle);
-	vy = vx * sin(drift_angle) + vy * cos(drift_angle);
+	vx = vx * cos(rot_angle) + vy * -sin(rot_angle);
+	vy = vx * sin(rot_angle) + vy * cos(rot_angle);
 
 	//autó léptetése a sebessége alapján
 	px += vx;
@@ -128,20 +163,46 @@ void simulate(int touch, float an) { //kocsi mozgásának szimulációja
 
 	//autó forgatása a forgási sebesség alapján
 	phi += omega;
+
+	//tartomány korlátozása
+	phi = fmod(phi + M_PI, 2 * M_PI);
+	phi -= M_PI;
 }
 
 void init_map() { //pálya betöltése
-	for (int i = 0; i < MAP_WIDTH; i++) {
-		for (int j = 0; j < MAP_HEIGHT; j++) {
-			map[i][j] = rand() % 16;
-		}
-	}
-	map[0][0] = 2;
-	px = 300;
-	py = 300;
+	px = 390;
+	py = 460;
 }
 
 extern const unsigned long car[]; //autó textúra
+
+void draw_car_lq() //autó rajzolása (gyorsabb)
+{
+	float centerx = px - cx;
+	float centery = py - cy;
+	int startx = (int) centerx - 25;
+	int starty = (int) centery - 25;
+	int endx = (int) centerx + 24;
+	int endy = (int) centery + 24;
+	for (int x = startx; x <= endx; x += 2) {
+		for (int y = starty; y <= endy; y += 2) {
+			float dx = x - startx - 25; //delta
+			float dy = y - starty - 25;
+			float ang = -phi - M_PI / 2;
+			float sx = dx * cos(ang) + dy * -sin(ang); //sampler
+			float sy = dx * sin(ang) + dy * cos(ang);
+			float tx = sx - 10;
+			float ty = sy - 5;
+			int tx_i = (int) (tx + 25);
+			int ty_i = (int) (ty + 25);
+			if (tx_i >= 0 && tx_i < 30 && ty_i >= 0 && ty_i < 40) {
+				//BSP_LCD_DrawPixel(x, y, car[32 * ty_i + tx_i]);
+				BSP_LCD_SetTextColor(car[32 * ty_i + tx_i]);
+				BSP_LCD_FillRect(x, y, 2, 2);
+			}
+		}
+	}
+}
 
 void draw_car() { //autó elforgatása és rajzolása
 	float centerx = px - cx;
@@ -175,13 +236,7 @@ void draw_tile(int ix, int offsetx, int offsety) { //egy négyzet rajzolása
 	else if (offsetx >= 0&& offsety >= 0 && offsetx < 240 - TILE_SIZE
 	&& offsety < 320 - TILE_SIZE) {
 		//a négyzet teljesen a képernyőn belül van
-		for (int i = 0; i < TILE_SIZE; i++) {
-			for (int j = 0; j < TILE_SIZE; j++) {
-				BSP_LCD_DrawPixel(offsetx + i, offsety + j,
-						tilemap[i + ix * TILE_SIZE
-								+ j * (TILEMAP_LENGTH * TILE_SIZE)]);
-			}
-		}
+		BSP_LCD_DrawBitmap_Tile32(offsetx, offsety, ix, &tilemap);
 	} else {
 		//a négyzet egy része van a képernyőn belül
 		for (int i = 0; i < TILE_SIZE; i++) {
@@ -189,8 +244,8 @@ void draw_tile(int ix, int offsetx, int offsety) { //egy négyzet rajzolása
 				if (offsetx + i >= 0 && offsetx + i < 240 && offsety + j >= 0
 						&& offsety + j < 320) {
 					BSP_LCD_DrawPixel(offsetx + i, offsety + j,
-							tilemap[i + ix * TILE_SIZE
-									+ j * (TILEMAP_LENGTH * TILE_SIZE)]);
+							tilemap[i + ix * TILE_SIZE * TILE_SIZE
+									+ j * TILE_SIZE]);
 				}
 			}
 		}
@@ -198,9 +253,14 @@ void draw_tile(int ix, int offsetx, int offsety) { //egy négyzet rajzolása
 }
 
 void draw_map(int cx, int cy) { //térkép rajzolása
-	for (int i = 0; i < MAP_WIDTH; i++) {
-		for (int j = 0; j < MAP_HEIGHT; j++) {
-			draw_tile(map[i][j], i * 32 - cx, j * 32 - cy);
+	int startx = max(0, cx / TILE_SIZE);
+	int starty = max(0, cy / TILE_SIZE);
+	int endx = min(MAP_WIDTH-1, (cx+SCREEN_WIDTH) / TILE_SIZE);
+	int endy = min(MAP_WIDTH-1, (cy+SCREEN_HEIGHT) / TILE_SIZE);
+	for (int x = startx; x <= endx; x++) {
+		for (int y = starty; y <= endy; y++) {
+			draw_tile(map[y * MAP_WIDTH + x], x * TILE_SIZE - cx,
+					y * TILE_SIZE - cy);
 		}
 	}
 }
@@ -258,10 +318,10 @@ void draw_frame() { //képernyő rajzolása
 			(cy - py - camera_lookahead*vy + SCREEN_HEIGHT/2) * camera_follow);
 
 	draw_map((int) cx, (int) cy);
-	draw_car();
+	draw_car_lq();
 
 	//diagnosztika
-	BSP_LCD_SetTextColor(0xFFFF0000);
+	/*BSP_LCD_SetTextColor(0xFFFF0000);
 	int player_circle_x = (int) (px - cx);
 	int player_circle_y = (int) (py - cy);
 	BSP_LCD_DrawCircle(limit(player_circle_x, 10, 230),
@@ -283,7 +343,7 @@ void draw_frame() { //képernyő rajzolása
 	snprintf(buf, sizeof(buf), "touch an: %d", (int) (an * 1000));
 	BSP_LCD_DisplayStringAtLine(4, buf);
 	snprintf(buf, sizeof(buf), "rot sp: %d", (int) (omega * 1000));
-	BSP_LCD_DisplayStringAtLine(5, buf);
+	BSP_LCD_DisplayStringAtLine(5, buf);*/
 	DRV_Display_SwitchBuffer();
 }
 
